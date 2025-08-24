@@ -12,9 +12,22 @@ Key Components:
     4. Comprehensive evaluation framework
     5. Guardrails for responsible AI
 
-Authors: Group 38
+Group Information:
+    Group Number: 38
+    Assigned Techniques:
+        - RAG: Re-Ranking with Cross-Encoders (Technique 3)
+        - Fine-Tuning: Mixture-of-Experts (MoE) Fine-Tuning (Technique 3)
+    
+    Team Members:
+        - LOKENDRA SINGH RATHOR (2023ac05526) - Contribution: 100%
+        - AASTHA SONKER (2023ad05106) - Contribution: 100%
+        - AYAN SEN (2023ac05171) - Contribution: 100%
+        - SATHISH KUMAR J (2023ac05739) - Contribution: 100%
+        - SHIVENDRA SINGH (2023ac05863) - Contribution: 100%
+
 Date: 2024
 Course: NLP/AI Assignment 2
+Institution: BITS Pilani
 """
 
 import os

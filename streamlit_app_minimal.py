@@ -54,7 +54,7 @@ st.markdown("""
 |-------------|-----------|--------------|
 | LOKENDRA SINGH RATHOR | 2023ac05526 | 100% |
 | AASTHA SONKER | 2023ad05106 | 100% |
-| AYAN SEN | 2023ac05979 | 100% |
+| AYAN SEN | 2023ac05171  | 100% |
 | SATHISH KUMAR J | 2023ac05739 | 100% |
 | SHIVENDRA SINGH | 2023ac05863 | 100% |
 """)
