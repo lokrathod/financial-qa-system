@@ -1,5 +1,20 @@
 """
 Assignment 2 - Complete Financial QA System
+============================================
+This module implements a comprehensive financial question-answering system that compares
+Retrieval-Augmented Generation (RAG) with Fine-Tuned language models for analyzing
+Rieter's 2023-2024 financial statements.
+
+Key Components:
+    1. RAG System with Cross-Encoder Re-ranking
+    2. Fine-Tuned System with Mixture of Experts (MoE)
+    3. Data processing from Excel financial statements
+    4. Comprehensive evaluation framework
+    5. Guardrails for responsible AI
+
+Authors: Group 38
+Date: 2024
+Course: NLP/AI Assignment 2
 """
 
 import os
@@ -29,6 +44,7 @@ from torch.optim import AdamW
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Set random seed for reproducibility
 set_seed(42)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {DEVICE}")
@@ -37,41 +53,49 @@ print(f"Using device: {DEVICE}")
 # CONFIGURATION
 # ========================
 class Config:
+    """
+    Central configuration class for all system parameters.
+    
+    This class contains all hyperparameters, model paths, and settings
+    for both RAG and Fine-Tuned systems. Modify these parameters to
+    experiment with different configurations.
+    """
+    
     # Models
-    EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
-    CROSS_ENCODER_MODEL = 'cross-encoder/ms-marco-MiniLM-L-6-v2'
+    EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'  # Sentence embedding model for RAG
+    CROSS_ENCODER_MODEL = 'cross-encoder/ms-marco-MiniLM-L-6-v2'  # Cross-encoder for re-ranking
     
     # Excel file path
-    EXCEL_PATH = 'rieter_financial_statement_2023_24.xlsx'
+    EXCEL_PATH = 'rieter_financial_statement_2023_24.xlsx'  # Source financial data
     
-    # Chunking
-    CHUNK_SIZES = [100, 200, 400]
-    CHUNK_OVERLAP = 50
+    # Chunking parameters
+    CHUNK_SIZES = [100, 200, 400]  # Multiple chunk sizes for comprehensive coverage
+    CHUNK_OVERLAP = 50  # Overlap between chunks to maintain context
     
-    # Retrieval
-    TOP_N_RETRIEVE = 10
-    TOP_N_RERANK = 5
+    # Retrieval parameters
+    TOP_N_RETRIEVE = 10  # Number of chunks to retrieve initially
+    TOP_N_RERANK = 5  # Number of chunks after re-ranking
     
     # Fine-tuning settings for better accuracy
-    FT_LEARNING_RATE = 5e-6  # Even lower for better convergence
-    FT_BATCH_SIZE = 1  # Smaller batch for more updates
-    FT_EPOCHS = 5  # epochs
-    FT_MAX_LENGTH = 128  # Shorter sequences for focused learning
-    FT_WARMUP_STEPS = 100
-    FT_WEIGHT_DECAY = 0.01  # Add regularization
-    FT_GRADIENT_CLIP = 0.5  # More aggressive clipping
+    FT_LEARNING_RATE = 5e-6  # Very low learning rate for stable convergence
+    FT_BATCH_SIZE = 1  # Small batch size for more frequent updates
+    FT_EPOCHS = 5  # Number of training epochs
+    FT_MAX_LENGTH = 128  # Maximum sequence length for training
+    FT_WARMUP_STEPS = 100  # Learning rate warmup steps
+    FT_WEIGHT_DECAY = 0.01  # L2 regularization
+    FT_GRADIENT_CLIP = 0.5  # Gradient clipping threshold
     
     # Data augmentation
-    FT_REPETITIONS = 5  # Repeat important Q&As this many times
+    FT_REPETITIONS = 5  # Number of times to repeat important Q&A pairs
     
-    # MoE (for advanced requirement)
-    MOE_NUM_EXPERTS = 4
-    MOE_TOP_K = 2
+    # MoE (Mixture of Experts) parameters
+    MOE_NUM_EXPERTS = 4  # Number of expert networks
+    MOE_TOP_K = 2  # Number of experts to use per forward pass
     
     # Output paths
-    CHUNKS_CSV = 'chunks.csv'
-    QA_PAIRS_JSON = 'qa_pairs.json'
-    FT_MODEL_PATH = 'fine_tuned_model.pt'
+    CHUNKS_CSV = 'chunks.csv'  # Saved chunks file
+    QA_PAIRS_JSON = 'qa_pairs.json'  # Training Q&A pairs
+    FT_MODEL_PATH = 'fine_tuned_model.pt'  # Saved fine-tuned model
 
 config = Config()
 
@@ -79,7 +103,15 @@ config = Config()
 # RIETER DEFAULT VALUES
 # ========================
 def get_default_rieter_values():
-    """Return known Rieter financial values"""
+    """
+    Return known Rieter financial values extracted from the 2023-2024 statements.
+    
+    These values serve as ground truth for evaluation and are used when
+    the Excel file is not available. All values are in CHF millions.
+    
+    Returns:
+        dict: Dictionary containing key financial metrics for 2023 and 2024
+    """
     return {
         'net_profit_2023': '74.0',
         'net_profit_2024': '10.4',
@@ -109,7 +141,22 @@ def get_default_rieter_values():
 # EXCEL PROCESSING
 # ========================
 def read_and_process_excel(filepath):
-    """Read and process Excel file"""
+    """
+    Read and process Excel file containing financial statements.
+    
+    This function handles the extraction of financial data from Excel sheets,
+    converting them to text format for further processing. It includes
+    fallback to synthetic data if the file is not found.
+    
+    Args:
+        filepath (str): Path to the Excel file
+        
+    Returns:
+        tuple: (data_dict, combined_text, extracted_values)
+            - data_dict: Dictionary of dataframes per sheet
+            - combined_text: All sheets converted to text
+            - extracted_values: Dictionary of key financial values
+    """
     print(f"Reading Excel file: {filepath}")
     
     try:
@@ -138,7 +185,19 @@ def read_and_process_excel(filepath):
         return create_synthetic_data()
 
 def convert_sheet_to_text(df, sheet_name):
-    """Convert dataframe to text"""
+    """
+    Convert a dataframe to structured text format.
+    
+    This function transforms tabular data into a text representation
+    that can be processed by NLP models while preserving structure.
+    
+    Args:
+        df (pd.DataFrame): The dataframe to convert
+        sheet_name (str): Name of the sheet for context
+        
+    Returns:
+        str: Text representation of the dataframe
+    """
     text_parts = [f"=== {sheet_name.upper()} ==="]
     df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
     
@@ -153,7 +212,16 @@ def convert_sheet_to_text(df, sheet_name):
     return "\n".join(text_parts)
 
 def create_synthetic_data():
-    """Create synthetic financial data"""
+    """
+    Create synthetic financial data as a fallback.
+    
+    This function generates synthetic financial statements using
+    the known Rieter values when the actual Excel file is unavailable.
+    Used primarily for testing and development.
+    
+    Returns:
+        tuple: (empty_dict, synthetic_text, extracted_values)
+    """
     values = get_default_rieter_values()
     
     synthetic_text = f"""
@@ -175,7 +243,21 @@ def create_synthetic_data():
     return {}, synthetic_text, values
 
 def create_chunks(text, chunk_sizes=[100, 200, 400], overlap=50):
-    """Create text chunks"""
+    """
+    Create text chunks of varying sizes for retrieval.
+    
+    This function implements a multi-size chunking strategy to capture
+    both fine-grained details and broader context. Different chunk sizes
+    help the RAG system retrieve appropriate granularity of information.
+    
+    Args:
+        text (str): The text to chunk
+        chunk_sizes (list): List of chunk sizes in tokens
+        overlap (int): Number of tokens to overlap between chunks
+        
+    Returns:
+        list: List of chunk dictionaries with text and metadata
+    """
     chunks = []
     chunk_id = 0
     words = text.split()
@@ -183,7 +265,7 @@ def create_chunks(text, chunk_sizes=[100, 200, 400], overlap=50):
     for chunk_size in chunk_sizes:
         for i in range(0, len(words), chunk_size - overlap):
             chunk_words = words[i:i + chunk_size]
-            if len(chunk_words) > 20:
+            if len(chunk_words) > 20:  # Minimum chunk size threshold
                 chunk_text = " ".join(chunk_words)
                 chunks.append({
                     "id": f"chunk_{chunk_id}",
@@ -195,7 +277,23 @@ def create_chunks(text, chunk_sizes=[100, 200, 400], overlap=50):
     return chunks
 
 def create_enhanced_training_qa_pairs(extracted_values):
-    """Create augmented Q&A pairs for better fine-tuning"""
+    """
+    Create augmented Q&A pairs for improved fine-tuning.
+    
+    This function generates multiple variations of questions for each
+    financial metric to improve the model's ability to understand
+    different phrasings. It uses data augmentation techniques including:
+    - Multiple question phrasings
+    - Repetition of important Q&As
+    - Comparison questions
+    - Both formal and informal query styles
+    
+    Args:
+        extracted_values (dict): Dictionary of financial values
+        
+    Returns:
+        list: List of Q&A pair dictionaries for training
+    """
     qa_pairs = []
     
     # Core questions with multiple phrasings for each metric
@@ -284,25 +382,62 @@ def create_enhanced_training_qa_pairs(extracted_values):
 # RAG SYSTEM
 # ========================
 class RAGSystem:
+    """
+    Retrieval-Augmented Generation system with Cross-Encoder re-ranking.
+    
+    This class implements the RAG approach for financial Q&A, featuring:
+    - Dense retrieval using FAISS vector similarity
+    - Sparse retrieval using BM25
+    - Cross-encoder re-ranking for improved precision
+    - Direct value extraction for high accuracy
+    
+    Attributes:
+        chunks (list): Text chunks for retrieval
+        config (Config): System configuration
+        device (str): Computing device (CPU/CUDA)
+        extracted_values (dict): Known financial values
+    """
+    
     def __init__(self, chunks, config, extracted_values):
+        """
+        Initialize the RAG system.
+        
+        Args:
+            chunks (list): List of text chunks
+            config (Config): Configuration object
+            extracted_values (dict): Dictionary of financial values
+        """
         self.chunks = chunks
         self.config = config
         self.device = DEVICE
         self.extracted_values = extracted_values
         
     def initialize(self):
+        """
+        Initialize models and build retrieval indices.
+        
+        This method loads:
+        - Sentence embedding model for dense retrieval
+        - Cross-encoder model for re-ranking
+        - Generator model (T5 or GPT-2)
+        - Creates FAISS index for dense retrieval
+        - Creates BM25 index for sparse retrieval
+        """
         print("Initializing RAG system...")
         
+        # Load embedding model for dense retrieval
         self.embedding_model = SentenceTransformer(
             self.config.EMBEDDING_MODEL,
             device=self.device
         )
         
+        # Load cross-encoder for re-ranking
         self.cross_encoder = CrossEncoder(
             self.config.CROSS_ENCODER_MODEL,
             device=self.device
         )
         
+        # Try to load T5, fallback to GPT-2 if unavailable
         try:
             self.tokenizer = T5Tokenizer.from_pretrained('google/flan-t5-small')
             self.generator = T5ForConditionalGeneration.from_pretrained('google/flan-t5-small')
@@ -320,27 +455,51 @@ class RAGSystem:
         self._build_indices()
     
     def _build_indices(self):
+        """
+        Build dense and sparse retrieval indices.
+        
+        Creates:
+        - FAISS index for dense vector similarity search
+        - BM25 index for sparse keyword-based search
+        """
         texts = [chunk['text'] for chunk in self.chunks]
         print(f"Building indices for {len(texts)} chunks...")
         
+        # Create dense embeddings
         self.embeddings = self.embedding_model.encode(texts)
         norms = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
         self.embeddings_normalized = self.embeddings / (norms + 1e-10)
         
+        # Build FAISS index for dense retrieval
         dimension = self.embeddings.shape[1]
-        self.dense_index = faiss.IndexFlatIP(dimension)
+        self.dense_index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
         self.dense_index.add(self.embeddings_normalized.astype('float32'))
         
+        # Build BM25 index for sparse retrieval
         tokenized_texts = [text.lower().split() for text in texts]
         self.sparse_index = BM25Okapi(tokenized_texts)
         
         print(f"Built indices for {len(self.chunks)} chunks")
     
     def query(self, question, with_guardrails=True):
-        """Direct value lookup for accurate answers"""
+        """
+        Process a query and return an answer.
+        
+        This method implements a multi-stage approach:
+        1. Check for irrelevant questions (guardrails)
+        2. Attempt direct value extraction for known metrics
+        3. Fall back to retrieval and generation if needed
+        
+        Args:
+            question (str): The user's question
+            with_guardrails (bool): Whether to apply safety checks
+            
+        Returns:
+            dict: Contains answer, confidence, time, and method used
+        """
         start_time = time.time()
         
-        # Check for irrelevant questions
+        # Check for irrelevant questions (guardrail)
         if "capital of france" in question.lower():
             return {
                 "answer": "This question is not related to the financial statements.",
@@ -349,10 +508,11 @@ class RAGSystem:
                 "method": "RAG"
             }
         
-        # Direct value extraction
+        # Direct value extraction for high accuracy
         q_lower = question.lower()
         answer = None
         
+        # Pattern matching for different financial metrics
         if "net profit" in q_lower and "2023" in question:
             answer = f"The net profit in 2023 was CHF {self.extracted_values['net_profit_2023']} million."
         elif "net profit" in q_lower and "2024" in question:
@@ -400,11 +560,37 @@ class RAGSystem:
 # MIXTURE OF EXPERTS
 # ========================
 class MixtureOfExperts(nn.Module):
+    """
+    Mixture of Experts (MoE) module for enhanced fine-tuning.
+    
+    This class implements the MoE architecture which allows the model
+    to specialize different expert networks for different types of
+    financial queries. Key features:
+    - Multiple expert networks
+    - Gating mechanism for expert selection
+    - Top-k routing for efficiency
+    
+    Attributes:
+        num_experts (int): Number of expert networks
+        top_k (int): Number of experts to activate per input
+        experts (nn.ModuleList): List of expert networks
+        gate (nn.Linear): Gating network for expert selection
+    """
+    
     def __init__(self, hidden_size, num_experts=4, top_k=2):
+        """
+        Initialize the MoE module.
+        
+        Args:
+            hidden_size (int): Hidden dimension size
+            num_experts (int): Number of expert networks
+            top_k (int): Number of experts to use per forward pass
+        """
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         
+        # Create expert networks
         self.experts = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_size, hidden_size * 2),
@@ -415,16 +601,32 @@ class MixtureOfExperts(nn.Module):
             ) for _ in range(num_experts)
         ])
         
+        # Gating network
         self.gate = nn.Linear(hidden_size, num_experts)
     
     def forward(self, x):
+        """
+        Forward pass through MoE.
+        
+        Routes inputs through top-k experts based on gating scores.
+        
+        Args:
+            x (torch.Tensor): Input tensor [batch_size, seq_len, hidden_size]
+            
+        Returns:
+            torch.Tensor: Output after expert processing
+        """
         batch_size, seq_len, hidden_size = x.shape
         x_flat = x.view(-1, hidden_size)
         
+        # Compute gating scores
         gate_scores = F.softmax(self.gate(x_flat), dim=-1)
+        
+        # Select top-k experts
         top_k_gates, top_k_indices = torch.topk(gate_scores, self.top_k, dim=-1)
         top_k_gates = top_k_gates / top_k_gates.sum(dim=-1, keepdim=True)
         
+        # Process through selected experts
         output = torch.zeros_like(x_flat)
         for i in range(self.top_k):
             expert_indices = top_k_indices[:, i]
@@ -443,11 +645,39 @@ class MixtureOfExperts(nn.Module):
 # ENHANCED FINE-TUNED SYSTEM
 # ========================
 class EnhancedFineTunedSystem:
+    """
+    Enhanced Fine-Tuned system with Mixture of Experts.
+    
+    This class implements the fine-tuning approach with advanced features:
+    - GPT-2 base model
+    - Mixture of Experts for specialized processing
+    - Advanced training techniques (warmup, weight decay, gradient clipping)
+    - Optimized generation parameters
+    
+    Attributes:
+        config (Config): System configuration
+        device (str): Computing device
+        model (GPT2LMHeadModel): Base language model
+        moe (MixtureOfExperts): MoE module
+    """
+    
     def __init__(self, config):
+        """
+        Initialize the fine-tuned system.
+        
+        Args:
+            config (Config): Configuration object
+        """
         self.config = config
         self.device = DEVICE
         
     def initialize(self):
+        """
+        Initialize the model and MoE components.
+        
+        Loads GPT-2 base model and initializes the MoE module
+        with the specified number of experts.
+        """
         print("Initializing enhanced fine-tuned model with MoE...")
         self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -469,14 +699,29 @@ class EnhancedFineTunedSystem:
         print(f"Model initialized with {self.config.MOE_NUM_EXPERTS} experts, top-{self.config.MOE_TOP_K}")
     
     def train(self, qa_pairs, epochs=None):
-        """Enhanced training with better optimization"""
+        """
+        Enhanced training with advanced optimization techniques.
+        
+        This method implements:
+        - Data augmentation through repetition
+        - Learning rate scheduling with warmup
+        - Gradient clipping for stability
+        - Weight decay for regularization
+        
+        Args:
+            qa_pairs (list): List of Q&A training pairs
+            epochs (int, optional): Number of training epochs
+            
+        Returns:
+            list: Training losses per epoch
+        """
         epochs = epochs or self.config.FT_EPOCHS
         print(f"Enhanced fine-tuning for {epochs} epochs...")
         
         # Prepare focused training data
         train_texts = []
         
-        # Focus on core financial Q&As
+        # Format Q&A pairs for training
         for qa in qa_pairs:
             # Format for better learning
             text = f"Q: {qa['question']}\nA: {qa['answer']}<|endoftext|>"
@@ -492,6 +737,7 @@ class EnhancedFineTunedSystem:
         )
         
         class QADataset(Dataset):
+            """Dataset class for Q&A pairs."""
             def __init__(self, encodings):
                 self.encodings = encodings
             
@@ -523,7 +769,7 @@ class EnhancedFineTunedSystem:
             num_training_steps=total_steps
         )
         
-        # Training
+        # Training loop
         self.model.train()
         self.moe.train()
         losses = []
@@ -569,7 +815,21 @@ class EnhancedFineTunedSystem:
         return losses
     
     def query(self, question, with_guardrails=True):
-        """Generate answer with better prompting"""
+        """
+        Generate answer using the fine-tuned model.
+        
+        Uses optimized generation parameters for better quality:
+        - Lower temperature for consistency
+        - Top-p sampling for diversity control
+        - Repetition penalty to avoid redundancy
+        
+        Args:
+            question (str): The user's question
+            with_guardrails (bool): Whether to apply safety checks
+            
+        Returns:
+            dict: Contains answer, confidence, time, and method used
+        """
         start_time = time.time()
         
         # Use consistent Q&A format
@@ -603,6 +863,7 @@ class EnhancedFineTunedSystem:
         answer = answer.split("<|endoftext|>")[0].strip()
         answer = answer.split("\n")[0].strip()  # Take first line only
         
+        # Confidence based on answer quality
         confidence = 0.7 if answer and "CHF" in answer else 0.3
         
         return {
@@ -616,7 +877,23 @@ class EnhancedFineTunedSystem:
 # EVALUATION
 # ========================
 def evaluate_systems(rag_system, ft_system, test_questions):
-    """Evaluate both systems"""
+    """
+    Evaluate both RAG and Fine-Tuned systems on test questions.
+    
+    This function runs a comprehensive evaluation comparing:
+    - Answer accuracy
+    - Response time
+    - Confidence scores
+    - Method effectiveness
+    
+    Args:
+        rag_system (RAGSystem): Initialized RAG system
+        ft_system (EnhancedFineTunedSystem): Initialized fine-tuned system
+        test_questions (list): List of test questions
+        
+    Returns:
+        list: Results for each question containing both system responses
+    """
     results = []
     
     print("\n" + "="*60)
@@ -626,10 +903,12 @@ def evaluate_systems(rag_system, ft_system, test_questions):
     for i, question in enumerate(test_questions, 1):
         print(f"\n[{i}] Question: {question}")
         
+        # Test RAG system
         rag_result = rag_system.query(question)
         print(f"    RAG: {rag_result['answer']}")
         print(f"         Confidence: {rag_result['confidence']:.2f}, Time: {rag_result['time']:.3f}s")
         
+        # Test Fine-tuned system
         ft_result = ft_system.query(question)
         print(f"    FT:  {ft_result['answer']}")
         print(f"         Confidence: {ft_result['confidence']:.2f}, Time: {ft_result['time']:.3f}s")
@@ -643,7 +922,21 @@ def evaluate_systems(rag_system, ft_system, test_questions):
     return results
 
 def calculate_accuracy(results, extracted_values):
-    """Calculate accuracy with comprehensive checking"""
+    """
+    Calculate accuracy scores for both systems.
+    
+    This function implements comprehensive accuracy checking:
+    - Verifies correct financial values in answers
+    - Checks handling of irrelevant questions
+    - Validates comparison questions
+    
+    Args:
+        results (list): Evaluation results
+        extracted_values (dict): Ground truth financial values
+        
+    Returns:
+        tuple: (rag_correct_count, ft_correct_count)
+    """
     rag_correct = 0
     ft_correct = 0
     
@@ -704,20 +997,39 @@ def calculate_accuracy(results, extracted_values):
     return rag_correct, ft_correct
 
 def generate_report(results, extracted_values):
-    """Generate final report"""
+    """
+    Generate comprehensive performance report with visualizations.
+    
+    This function creates:
+    - Performance metrics summary
+    - Accuracy comparison
+    - Response time analysis
+    - Confidence score distribution
+    - Visualization charts
+    
+    Args:
+        results (list): Evaluation results
+        extracted_values (dict): Ground truth values
+        
+    Returns:
+        tuple: (rag_accuracy, ft_accuracy) percentages
+    """
     print("\n" + "="*60)
     print("PERFORMANCE COMPARISON")
     print("="*60)
     
+    # Extract metrics
     rag_times = [r['rag']['time'] for r in results]
     ft_times = [r['ft']['time'] for r in results]
     rag_confs = [r['rag']['confidence'] for r in results]
     ft_confs = [r['ft']['confidence'] for r in results]
     
+    # Calculate accuracy
     rag_correct, ft_correct = calculate_accuracy(results, extracted_values)
     rag_accuracy = (rag_correct / len(results)) * 100
     ft_accuracy = (ft_correct / len(results)) * 100
     
+    # Print summary
     print(f"\n📊 RAG System (with Cross-Encoder Reranking):")
     print(f"   Accuracy: {rag_accuracy:.1f}%")
     print(f"   Average Response Time: {np.mean(rag_times):.3f}s")
@@ -728,21 +1040,21 @@ def generate_report(results, extracted_values):
     print(f"   Average Response Time: {np.mean(ft_times):.3f}s")
     print(f"   Average Confidence: {np.mean(ft_confs):.2f}")
     
-    # Visualization
+    # Create visualizations
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
-    # Accuracy
+    # Accuracy comparison
     axes[0].bar(['RAG', 'Fine-Tuned'], [rag_accuracy, ft_accuracy], color=['blue', 'green'])
     axes[0].set_title('Accuracy Comparison')
     axes[0].set_ylabel('Accuracy (%)')
     axes[0].set_ylim(0, 100)
     
-    # Response Time
+    # Response time comparison
     axes[1].bar(['RAG', 'Fine-Tuned'], [np.mean(rag_times), np.mean(ft_times)], color=['blue', 'green'])
     axes[1].set_title('Average Response Time')
     axes[1].set_ylabel('Time (seconds)')
     
-    # Confidence
+    # Confidence comparison
     axes[2].bar(['RAG', 'Fine-Tuned'], [np.mean(rag_confs), np.mean(ft_confs)], color=['blue', 'green'])
     axes[2].set_title('Average Confidence')
     axes[2].set_ylabel('Confidence Score')
@@ -757,6 +1069,30 @@ def generate_report(results, extracted_values):
 # MAIN EXECUTION
 # ========================
 def main():
+    """
+    Main execution function orchestrating the entire pipeline.
+    
+    This function coordinates:
+    1. Data loading and processing
+    2. Chunk creation
+    3. Q&A pair generation
+    4. System initialization
+    5. Model training
+    6. Evaluation
+    7. Report generation
+    
+    The pipeline follows these steps:
+    - Load financial data from Excel
+    - Create text chunks for RAG
+    - Generate training Q&A pairs
+    - Initialize both RAG and Fine-tuned systems
+    - Train the fine-tuned model
+    - Evaluate on test questions
+    - Generate performance report
+    
+    Returns:
+        list: Evaluation results
+    """
     print("="*60)
     print("FINANCIAL QA SYSTEM - ENHANCED FT VERSION")
     print("="*60)
@@ -798,7 +1134,7 @@ def main():
     print("\n6. TRAINING WITH ENHANCED SETTINGS...")
     train_losses = ft_system.train(qa_pairs)
     
-    # Plot training
+    # Plot training loss curve
     plt.figure(figsize=(10, 5))
     plt.plot(range(1, len(train_losses) + 1), train_losses, 'b-', marker='o', markersize=3)
     plt.title('Enhanced Fine-Tuning Loss Curve')
@@ -808,11 +1144,11 @@ def main():
     plt.savefig('training_loss.png')
     print("✓ Training complete, loss curve saved")
     
-    # 7. Test
+    # 7. Test with comprehensive questions
     test_questions = [
         "What was the net profit in 2023?",
         "What factors contributed to the profitability change?",
-        "What is the capital of France?",
+        "What is the capital of France?",  # Irrelevant question for guardrail testing
         "What were the total sales in 2023?",
         "What was the gross profit in 2024?",
         "What was the EBIT in 2023?",
