@@ -407,5 +407,5 @@ If using this code for academic purposes:
 Group 38 - Financial QA System
 Assignment 2: RAG vs Fine-Tuning Comparison
 Techniques: Cross-Encoder Re-ranking & Mixture of Experts
-2024
+2025
 ```
